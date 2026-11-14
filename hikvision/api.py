@@ -476,6 +476,38 @@ class CreateDevice(object):
         c = self.set("ptzctrl/channels/" + str(channel) + "/absolute", xmlstr,flags="sendexact")
         return c
 
+    def getPTZMoveStatus(self, channel=1):
+        """Return whether the camera reports PTZ movement."""
+        url = "%s/PTZCtrl/channels/%s/status" % (self._base, channel)
+        response = requests.get(
+            url,
+            auth=HTTPBasicAuth(self._username, self._password),
+            timeout=3
+        )
+        response.raise_for_status()
+
+        root = ElementTree.fromstring(response.text)
+        move_status = next(
+            (element for element in root.iter()
+             if element.tag.rsplit("}", 1)[-1] == "MoveStatus"),
+            None
+        )
+        if move_status is None:
+            raise ValueError("PTZ status response has no MoveStatus element")
+
+        values = [
+            element.text.strip().upper()
+            for element in move_status.iter()
+            if element is not move_status and element.text and element.text.strip()
+        ]
+        if not values:
+            raise ValueError("PTZ status response has no movement values")
+        if "MOVING" in values:
+            return True
+        if all(value == "IDLE" for value in values):
+            return False
+        raise ValueError("Unexpected PTZ movement status: %s" % ", ".join(values))
+
     def setDHCP(self):
         c = self.set("Network/interfaces/1/IPAddress.addressingType",
                 "<IPAddress><ipVersion>v4</ipVersion><addressingType>dynamic</addressingType></IPAddress>",
