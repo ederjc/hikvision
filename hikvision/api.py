@@ -17,7 +17,7 @@ from hikvision.constants import DEFAULT_PORT, DEFAULT_HEADERS, XML_ENCODING
 from hikvision.constants import DEFAULT_SENS_LEVEL
 from hikvision.constants import STATUS_CODES
 from requests.exceptions import ConnectionError as ReConnError
-from requests.auth import HTTPBasicAuth
+from requests.auth import HTTPBasicAuth, HTTPDigestAuth
 
 _LOGGING = logging.getLogger(__name__)
 
@@ -476,37 +476,27 @@ class CreateDevice(object):
         c = self.set("ptzctrl/channels/" + str(channel) + "/absolute", xmlstr,flags="sendexact")
         return c
 
-    def getPTZMoveStatus(self, channel=1):
-        """Return whether the camera reports PTZ movement."""
-        url = "%s/PTZCtrl/channels/%s/status" % (self._base, channel)
+    def getPTZPosition(self, channel=1):
+        """Return the camera's azimuth, elevation and absolute zoom."""
+        url = "%s/ISAPI/PTZCtrl/channels/%s/status" % (self._base, channel)
         response = requests.get(
             url,
-            auth=HTTPBasicAuth(self._username, self._password),
+            auth=HTTPDigestAuth(self._username, self._password),
             timeout=3
         )
         response.raise_for_status()
 
         root = ElementTree.fromstring(response.text)
-        move_status = next(
-            (element for element in root.iter()
-             if element.tag.rsplit("}", 1)[-1] == "MoveStatus"),
-            None
-        )
-        if move_status is None:
-            raise ValueError("PTZ status response has no MoveStatus element")
-
-        values = [
-            element.text.strip().upper()
-            for element in move_status.iter()
-            if element is not move_status and element.text and element.text.strip()
-        ]
-        if not values:
-            raise ValueError("PTZ status response has no movement values")
-        if "MOVING" in values:
-            return True
-        if all(value == "IDLE" for value in values):
-            return False
-        raise ValueError("Unexpected PTZ movement status: %s" % ", ".join(values))
+        position = root.find(".//{*}AbsoluteHigh")
+        if position is None:
+            raise ValueError("PTZ status response has no AbsoluteHigh element")
+        values = []
+        for field in ("azimuth", "elevation", "absoluteZoom"):
+            element = position.find("{*}" + field)
+            if element is None or not element.text or not element.text.strip():
+                raise ValueError("PTZ status response has no %s value" % field)
+            values.append(int(element.text.strip()))
+        return tuple(values)
 
     def setDHCP(self):
         c = self.set("Network/interfaces/1/IPAddress.addressingType",

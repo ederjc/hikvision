@@ -23,8 +23,8 @@ class TestAPI(unittest.TestCase):
         self.assertRaises(MissingParamError, lambda: hikvision.api.CreateDevice())
         self.assertRaises(HikvisionError, lambda: hikvision.api.CreateDevice('10.10.10.4'))
 
-    def test_get_ptz_move_status(self):
-        """Read moving and idle states from the PTZ status response."""
+    def test_get_ptz_position(self):
+        """Read the three absolute PTZ coordinates from the camera response."""
         device = hikvision.api.CreateDevice.__new__(hikvision.api.CreateDevice)
         device._base = "http://camera"
         device._username = "user"
@@ -35,31 +35,36 @@ class TestAPI(unittest.TestCase):
         with patch.object(hikvision.api.requests, "get", return_value=response) as get:
             response.text = (
                 '<PTZStatus xmlns="http://www.hikvision.com/ver20/XMLSchema">'
-                '<MoveStatus><panTilt>MOVING</panTilt><zoom>IDLE</zoom></MoveStatus>'
+                '<AbsoluteHigh><azimuth>1675</azimuth><elevation>142</elevation>'
+                '<absoluteZoom>16</absoluteZoom></AbsoluteHigh>'
                 '</PTZStatus>'
             )
-            self.assertTrue(device.getPTZMoveStatus())
+            self.assertEqual(device.getPTZPosition(), (1675, 142, 16))
 
-            response.text = (
-                '<PTZStatus xmlns="http://www.hikvision.com/ver20/XMLSchema">'
-                '<MoveStatus><panTilt>IDLE</panTilt><zoom>IDLE</zoom></MoveStatus>'
-                '</PTZStatus>'
-            )
-            self.assertFalse(device.getPTZMoveStatus())
+        self.assertEqual(get.call_args.args[0], "http://camera/ISAPI/PTZCtrl/channels/1/status")
+        self.assertIsInstance(get.call_args.kwargs["auth"], hikvision.api.HTTPDigestAuth)
+        self.assertEqual(get.call_args.kwargs["timeout"], 3)
 
-        self.assertEqual(get.call_count, 2)
-
-    def test_get_ptz_move_status_rejects_missing_state(self):
-        """Do not treat an unrecognized status response as stopped."""
+    def test_get_ptz_position_rejects_incomplete_response(self):
+        """Do not use missing or invalid coordinates as a position."""
         device = hikvision.api.CreateDevice.__new__(hikvision.api.CreateDevice)
         device._base = "http://camera"
         device._username = "user"
         device._password = "password"
         response = Mock()
-        response.text = "<PTZStatus />"
         response.raise_for_status.return_value = None
 
         with patch.object(hikvision.api.requests, "get", return_value=response):
-            with self.assertRaises(ValueError):
-                device.getPTZMoveStatus()
+            for xml in (
+                "<PTZStatus />",
+                "<PTZStatus><AbsoluteHigh><azimuth>1</azimuth>"
+                "<elevation>2</elevation></AbsoluteHigh></PTZStatus>",
+                "<PTZStatus><AbsoluteHigh><azimuth>invalid</azimuth>"
+                "<elevation>2</elevation><absoluteZoom>3</absoluteZoom>"
+                "</AbsoluteHigh></PTZStatus>",
+            ):
+                with self.subTest(xml=xml):
+                    response.text = xml
+                    with self.assertRaises(ValueError):
+                        device.getPTZPosition()
 
